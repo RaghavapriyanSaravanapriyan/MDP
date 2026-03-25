@@ -1,3 +1,4 @@
+import sys
 import base64
 import numpy as np
 import cv2
@@ -6,11 +7,23 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from recognizer import FaceRecognizerWrapper
 
-app = Flask(__name__, static_folder="../frontend")
+def get_base_path():
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        return sys._MEIPASS
+    except Exception:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+base_path = get_base_path()
+frontend_path = os.path.join(base_path, 'frontend')
+
+app = Flask(__name__, static_folder=frontend_path)
 CORS(app)
 
-# Initialize Recognizer
-recog = FaceRecognizerWrapper(data_dir=os.path.join(os.path.dirname(__file__), "..", "data"))
+# Store data relative to WHERE the user runs the executable so it persists
+data_dir = os.path.join(os.getcwd(), "data")
+os.makedirs(data_dir, exist_ok=True)
+recog = FaceRecognizerWrapper(data_dir=data_dir)
 
 def base64_to_image(b64_string):
     if "," in b64_string:
@@ -85,4 +98,8 @@ def get_team():
     return jsonify({"status": "success", "team": []})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Open the browser automatically when the application starts
+    import threading
+    import webbrowser
+    threading.Timer(1.25, lambda: webbrowser.open("http://localhost:5000")).start()
+    app.run(host='0.0.0.0', port=5000)
