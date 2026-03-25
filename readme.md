@@ -7,30 +7,25 @@ A complete, end-to-end Smart Door Camera web application with a sleek, hacker-es
 - **Backend**: A robust Flask API providing endpoints for image registration, model training, and frame recognition.
 - **Computer Vision**: Utilizes OpenCV's built-in `LBPHFaceRecognizer` for lightning-fast dynamic face registration and training.
 
-## Installation & Setup
+## 🚀 Windows Deployment (Handoff)
 
-Linux systems often enforce PEP 668 to protect system packages, which means running `pip install` globally will throw an **externally managed environment** error. To resolve this safely, we use a Python Virtual Environment (`venv`).
+To provide the client with a single **Portable `.exe`**, follow these simple steps on any Windows machine:
 
-1. **Create the Virtual Environment**
-   Open a terminal in the project directory and run:
-   ```bash
-   python3 -m venv .venv
-   ```
+1. **Copy this folder** to the Windows machine.
+2. **Double-click `build_windows.bat`**.
+3. A single file called **`SmartDoorCamera.exe`** will be generated in the `dist/` folder.
+4. **Give that file to the client.** When they open it, it will automatically launch the server and the web dashboard.
 
-2. **Activate the Virtual Environment & Install Dependencies**
-   ```bash
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
+---
 
-3. **Start the Server**
-   Make sure your virtual environment is still activated, then run the Flask app:
-   ```bash
-   python backend/app.py
-   ```
-   
-4. **Open the Application**
-   Navigate to [http://localhost:5000](http://localhost:5000) in your web browser. When prompted, **allow camera permissions**.
+## 🛠 Manual Setup (Linux)
+If you wish to run the project directly on Linux without an executable:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python backend/app.py
+```
 
 ## User Guide
 
