@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Door Camera</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="top-bar">
+        <h1>multidisciplinary project</h1>
+    </div>
+
+    <!-- SETUP VIEW -->
+    <div id="setup-view" class="view active">
+        <h2>System Setup</h2>
+        <div class="camera-container">
+            <video id="setup-video" autoplay playsinline></video>
+            <div class="shutter-btn" id="shutter-btn"></div>
+        </div>
+        <div class="controls">
+            <input type="text" id="person-name" placeholder="Enter Name">
+            <p id="setup-status"></p>
+        </div>
+        <div class="action-bar">
+            <!-- Clear/Reset button logic can be hidden or just rely on page load via api/setup -->
+            <button id="train-btn" class="primary-btn">Start Training</button>
+        </div>
+    </div>
+
+    <!-- LOADING VIEW -->
+    <div id="loading-view" class="view">
+        <h2>Training Model</h2>
+        <div class="progress-bar">
+            <div class="progress" id="progress"></div>
+        </div>
+        <p id="loading-text">Processing images...</p>
+    </div>
+
+    <!-- DEMO VIEW -->
+    <div id="demo-view" class="view">
+        <div class="demo-layout">
+            <div class="left-panel">
+                <h3>Last Visited</h3>
+                <div class="visited-info">
+                    <p id="last-person">None</p>
+                </div>
+                <div class="team-list">
+                    <h3>Team Members</h3>
+                    <ul id="team-members"></ul>
+                </div>
+            </div>
+            
+            <div class="center-panel">
+                <div class="camera-container live-feed">
+                    <video id="demo-video" autoplay playsinline></video>
+                    <div class="scan-line"></div>
+                </div>
+            </div>
+            
+            <div class="right-panel">
+                <h3>System Status</h3>
+                <div class="lock-status locked" id="lock-status">
+                    <h1>LOCKED</h1>
+                </div>
+            </div>
+        </div>
+        <button id="restart-btn" class="secondary-btn">Reset System</button>
+    </div>
+
+    <canvas id="canvas" style="display:none;"></canvas>
+    
+    <script src="script.js"></script>
+</body>
+</html>
