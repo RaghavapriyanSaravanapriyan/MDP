@@ -12,6 +12,9 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
 const shutterBtn = document.getElementById('shutter-btn');
+const uploadBtn = document.getElementById('upload-btn');
+const imageUpload = document.getElementById('image-upload');
+const imagePreview = document.getElementById('image-preview');
 const personName = document.getElementById('person-name');
 const setupStatus = document.getElementById('setup-status');
 const trainBtn = document.getElementById('train-btn');
@@ -105,6 +108,56 @@ shutterBtn.addEventListener('click', async () => {
     } catch (e) {
         setupStatus.textContent = "Network error while saving.";
     }
+});
+
+uploadBtn.addEventListener('click', () => {
+    imageUpload.click();
+});
+
+imageUpload.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const name = personName.value.trim();
+    if (!name) {
+        setupStatus.textContent = "Please enter a name first.";
+        imageUpload.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+        const imageB64 = event.target.result;
+        
+        // Show preview
+        imagePreview.style.backgroundImage = `url(${imageB64})`;
+        imagePreview.style.display = 'block';
+        setupStatus.textContent = "Uploading image...";
+
+        try {
+            const res = await fetch(`${API_URL}/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, image: imageB64 })
+            });
+            const data = await res.json();
+            
+            if (data.status === 'success') {
+                setupStatus.textContent = `Image uploaded and saved for ${name}!`;
+                setTimeout(() => {
+                    imagePreview.style.display = 'none';
+                }, 2000);
+            } else {
+                setupStatus.textContent = `Error: ${data.message}.`;
+                imagePreview.style.display = 'none';
+            }
+        } catch (err) {
+            setupStatus.textContent = "Network error while uploading.";
+            imagePreview.style.display = 'none';
+        }
+        imageUpload.value = '';
+    };
+    reader.readAsDataURL(file);
 });
 
 trainBtn.addEventListener('click', async () => {

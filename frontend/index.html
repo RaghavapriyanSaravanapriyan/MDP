@@ -17,10 +17,15 @@
         <h2>System Setup</h2>
         <div class="camera-container">
             <video id="setup-video" autoplay playsinline></video>
+            <div id="image-preview" class="image-preview-overlay"></div>
             <div class="shutter-btn" id="shutter-btn"></div>
         </div>
         <div class="controls">
             <input type="text" id="person-name" placeholder="Enter Name">
+            <div class="upload-section">
+                <input type="file" id="image-upload" accept="image/*" style="display: none;">
+                <button id="upload-btn" class="secondary-btn small-btn">Upload Image</button>
+            </div>
             <p id="setup-status"></p>
         </div>
         <div class="action-bar">
