@@ -29,7 +29,8 @@ class FaceRecognizerWrapper:
         
         # 2. Identity Path: Facenet512 (99.65% Accuracy, stable download)
         self.model_name = "Facenet512" 
-        self.detector_backend = "mediapipe"
+        self.detector_backend = "mediapipe" # Fast for real-time
+        self.registration_detector = "retinaface" # Accurate for setup
         self.distance_metric = "cosine"
         self.threshold = 0.30 
         
@@ -69,16 +70,28 @@ class FaceRecognizerWrapper:
         return img
 
     def save_face(self, name, image_np):
-        """Robust multi-detector registration flow."""
+        """Robust registration with retinaface, raw backups, and metadata."""
+        import json
+        from datetime import datetime
+        
         with self.lock:
             person_dir = self.photos_dir / name
+            raw_dir = person_dir / "raw"
             person_dir.mkdir(parents=True, exist_ok=True)
+            raw_dir.mkdir(parents=True, exist_ok=True)
             
+            # 1. Save Raw Original
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            raw_count = len(list(raw_dir.glob("*.jpg")))
+            raw_path = raw_dir / f"raw_{raw_count}_{timestamp}.jpg"
+            cv2.imwrite(str(raw_path), image_np)
+            
+            # 2. Extract and Save High-Accuracy Face Sample
             processed_img = self.preprocess_image(image_np)
-            count = len(list(person_dir.glob("*.jpg")))
+            sample_count = len(list(person_dir.glob("*.jpg")))
             
-            # Fallback loop to ensure capture
-            backends = [self.detector_backend, 'mtcnn', 'opencv', 'ssd']
+            # Use retinaface for maximum accuracy during registration
+            backends = [self.registration_detector, 'mediapipe', 'mtcnn', 'opencv']
             faces = None
             for backend in backends:
                 try:
@@ -88,9 +101,7 @@ class FaceRecognizerWrapper:
                         enforce_detection=True,
                         align=True
                     )
-                    if faces:
-                        logger.info(f"Captured {name} using {backend}")
-                        break
+                    if faces: break
                 except: continue
             
             if not faces:
@@ -103,9 +114,22 @@ class FaceRecognizerWrapper:
                     face_img = (face_img * 255).astype(np.uint8)
                 face_img = cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR)
                 
-                img_path = person_dir / f"{name}_{count}.jpg"
+                img_path = person_dir / f"{name}_{sample_count}.jpg"
                 cv2.imwrite(str(img_path), face_img)
-                count += 1
+                sample_count += 1
+            
+            # 3. Update Metadata
+            info_path = person_dir / "info.json"
+            info = {
+                "name": name,
+                "last_registered": str(datetime.now()),
+                "sample_count": sample_count,
+                "status": "authorized"
+            }
+            try:
+                with open(info_path, 'w', encoding='utf-8') as f:
+                    json.dump(info, f, indent=4)
+            except: pass
             
             self._clear_index()
             return True
@@ -128,16 +152,30 @@ class FaceRecognizerWrapper:
                 
             try:
                 self._clear_index()
-                # Trigger indexing
-                DeepFace.find(
-                    img_path=np.zeros((224, 224, 3), dtype=np.uint8),
-                    db_path=self.db_path,
-                    model_name=self.model_name,
-                    detector_backend=self.detector_backend,
-                    distance_metric=self.distance_metric,
-                    enforce_detection=False,
-                    silent=True
-                )
+                # Try primary detector, fall back to opencv if mediapipe is broken on client
+                try:
+                    DeepFace.find(
+                        img_path=np.zeros((224, 224, 3), dtype=np.uint8),
+                        db_path=self.db_path,
+                        model_name=self.model_name,
+                        detector_backend=self.detector_backend,
+                        distance_metric=self.distance_metric,
+                        enforce_detection=False,
+                        silent=True
+                    )
+                except Exception as e:
+                    if "mediapipe" in str(e).lower():
+                        logger.warning("Mediapipe failed on client, falling back to opencv for indexing...")
+                        DeepFace.find(
+                            img_path=np.zeros((224, 224, 3), dtype=np.uint8),
+                            db_path=self.db_path,
+                            model_name=self.model_name,
+                            detector_backend="opencv",
+                            distance_metric=self.distance_metric,
+                            enforce_detection=False,
+                            silent=True
+                        )
+                    else: raise e
                 logger.info("Global facial index rebuilt.")
                 return True, "Database indexed successfully"
             except Exception as e:
@@ -145,27 +183,40 @@ class FaceRecognizerWrapper:
                 return False, f"Internal indexing error: {str(e)}"
 
     def check_dataset_readiness(self, min_samples=5):
-        """Check if each registered person has at least min_samples."""
+        """Check registration status using metadata and file counts."""
+        import json
         if not self.photos_dir.exists():
-            return {"ready": False, "message": "No photos directory found."}
+            return {"ready": False, "message": "No registry found."}
             
         people = [d for d in self.photos_dir.iterdir() if d.is_dir()]
         if not people:
-            return {"ready": False, "message": "No people registered yet."}
+            return {"ready": False, "message": "No people registered."}
             
         insufficient = []
         for person_dir in people:
-            count = len(list(person_dir.glob("*.jpg")))
+            # Prefer metadata if exists
+            info_path = person_dir / "info.json"
+            count = 0
+            if info_path.exists():
+                try:
+                    with open(info_path, 'r', encoding='utf-8') as f:
+                        count = json.load(f).get("sample_count", 0)
+                except: pass
+            
+            # Fallback to actual file count
+            if count < min_samples:
+                count = len(list(person_dir.glob("*.jpg")))
+                
             if count < min_samples:
                 insufficient.append(f"{person_dir.name} ({count}/{min_samples})")
         
         if insufficient:
             return {
                 "ready": False, 
-                "message": f"Insufficient photos for: {', '.join(insufficient)}. Minimum {min_samples} required."
+                "message": f"Insufficient data for: {', '.join(insufficient)}. Need {min_samples} samples."
             }
             
-        return {"ready": True, "message": "Dataset is ready."}
+        return {"ready": True, "message": "Registry ready for indexing."}
 
     def recognize(self, image_np, fast_only=False):
         """Dual-Path logic: Optimized tracking vs. High-accuracy identity."""
