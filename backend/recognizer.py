@@ -4,6 +4,7 @@ import numpy as np
 import logging
 import threading
 import json
+import requests
 from pathlib import Path
 from datetime import datetime
 
@@ -15,49 +16,58 @@ class FaceRecognizerWrapper:
     def __init__(self, data_dir="data"):
         self.base_dir = Path(data_dir).resolve()
         self.photos_dir = self.base_dir / "photos"
-        self.model_path = self.base_dir / "trainer.yml"
+        self.models_dir = self.base_dir / "models"
         self.photos_dir.mkdir(parents=True, exist_ok=True)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         
         self.lock = threading.Lock()
         
-        # --- OPENCV LBPH CONFIG ---
-        # No external AI weights needed. Extremely stable.
+        # --- MODEL PATHS ---
+        self.det_model_path = self.models_dir / "face_detection_yunet_2023mar.onnx"
+        self.rec_model_path = self.models_dir / "face_recognition_sface_2021dec.onnx"
+        
+        # --- DOWNLOAD MODELS IF MISSING ---
+        self._ensure_models()
+        
+        # --- INITIALIZE OPENCV DNN MODULES ---
         try:
-            self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-            # Haar Cascade is built into OpenCV
-            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            self.face_cascade = cv2.CascadeClassifier(cascade_path)
-            
-            if self.model_path.exists():
-                self.recognizer.read(str(self.model_path))
-                logger.info("LBPH Model loaded from disk.")
+            # 1. Initialize Detector (YuNet)
+            self.detector = cv2.FaceDetectorYN.create(
+                str(self.det_model_path), "", (320, 320), 0.9, 0.3, 5000
+            ) 
+            # 2. Initialize Recognizer (SFace)
+            self.recognizer = cv2.FaceRecognizerSF.create(
+                str(self.rec_model_path), ""
+            )
+            logger.info("High-Accuracy SFace Engine initialized.")
         except Exception as e:
-            logger.error(f"Failed to initialize OpenCV Recognizer: {e}")
+            logger.error(f"Failed to initialize SFace: {e}")
             raise e
 
-        self.label_map = self._load_label_map()
+        self.face_bank = {} # {name: [embedding1, embedding2, ...]}
+        self.train() 
 
-    def _load_label_map(self):
-        map_path = self.base_dir / "labels.json"
-        if map_path.exists():
-            with open(map_path, 'r') as f:
-                # Convert keys back to int
-                return {int(k): v for k, v in json.load(f).items()}
-        return {}
-
-    def _save_label_map(self):
-        map_path = self.base_dir / "labels.json"
-        with open(map_path, 'w') as f:
-            json.dump(self.label_map, f)
-
-    def preprocess_image(self, img):
-        if img is None: return None
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # Equalize histogram for better light consistency
-        return cv2.equalizeHist(gray)
+    def _ensure_models(self):
+        """Download YuNet and SFace models from OpenCV Zoo if missing."""
+        urls = {
+            self.det_model_path: "https://github.com/opencv/opencv_zoo/raw/master/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+            self.rec_model_path: "https://github.com/opencv/opencv_zoo/raw/master/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+        }
+        for path, url in urls.items():
+            if not path.exists():
+                logger.info(f"Downloading model from {url}...")
+                try:
+                    response = requests.get(url, timeout=30)
+                    response.raise_for_status()
+                    with open(path, 'wb') as f:
+                        f.write(response.content)
+                    logger.info(f"Model saved to {path.name}")
+                except Exception as e:
+                    logger.error(f"Failed to download {path.name}: {e}")
+                    raise e
 
     def save_face(self, name, image_np):
-        """Standard registration flow using Haar cascades and LBPH samples."""
+        """Capture raw frame, extract aligned face crop, and generate SFace embedding."""
         with self.lock:
             person_dir = self.photos_dir / name
             raw_dir = person_dir / "raw"
@@ -69,20 +79,26 @@ class FaceRecognizerWrapper:
             raw_count = len(list(raw_dir.glob("*.jpg")))
             cv2.imwrite(str(raw_dir / f"raw_{raw_count}_{timestamp}.jpg"), image_np)
             
-            # 2. Extract Face for Training
-            gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
-            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+            # 2. Extract SFace Embedding
+            h, w = image_np.shape[:2]
+            self.detector.setInputSize((w, h))
+            _, faces = self.detector.detect(image_np)
             
-            if len(faces) == 0:
-                logger.warning(f"No face detected in capture for {name}")
+            if faces is None:
+                logger.warning(f"No face detected for {name}")
                 return False
                 
-            x, y, w, h = faces[0]
-            face_sample = gray[y:y+h, x:x+w]
+            # Align and crop the face
+            aligned_face = self.recognizer.alignCrop(image_np, faces[0])
+            embedding = self.recognizer.feature(aligned_face)
             
+            # Save cropped face sample
             sample_count = len(list(person_dir.glob("*.jpg")))
             img_path = person_dir / f"{name}_{sample_count}.jpg"
-            cv2.imwrite(str(img_path), face_sample)
+            cv2.imwrite(str(img_path), aligned_face)
+            
+            # Save embedding for fast training
+            np.save(str(person_dir / f"{name}_{sample_count}.npy"), embedding)
             
             # 3. Update Metadata
             info_path = person_dir / "info.json"
@@ -94,85 +110,83 @@ class FaceRecognizerWrapper:
             with open(info_path, 'w', encoding='utf-8') as f:
                 json.dump(info, f, indent=4)
             
+            self.train() # Hot-reload
             return True
 
     def train(self):
-        """Train LBPH recognizer on all stored samples."""
+        """Load all saved SFace embeddings into memory."""
         readiness = self.check_dataset_readiness()
         if not readiness["ready"]:
             return False, readiness["message"]
             
         with self.lock:
-            faces = []
-            labels = []
-            new_label_map = {}
-            current_id = 0
-            
+            self.face_bank = {}
             for person_dir in self.photos_dir.iterdir():
                 if person_dir.is_dir():
                     name = person_dir.name
-                    new_label_map[current_id] = name
-                    
-                    for img_file in person_dir.glob("*.jpg"):
-                        img = cv2.imread(str(img_file), cv2.IMREAD_GRAYSCALE)
-                        if img is not None:
-                            faces.append(img)
-                            labels.append(current_id)
-                    current_id += 1
+                    embeddings = []
+                    for npy_file in person_dir.glob("*.npy"):
+                        try:
+                            embeddings.append(np.load(str(npy_file)))
+                        except: continue
+                    if embeddings:
+                        self.face_bank[name] = embeddings
             
-            if not faces:
-                return False, "No samples found for training."
-                
-            self.recognizer.train(faces, np.array(labels))
-            self.recognizer.save(str(self.model_path))
-            self.label_map = new_label_map
-            self._save_label_map()
-            
-            logger.info(f"LBPH Model trained for {len(self.label_map)} people.")
-            return True, "Model updated successfully."
+            logger.info(f"Loaded {len(self.face_bank)} people into SFace bank.")
+            return True, "Identity database updated."
 
     def check_dataset_readiness(self, min_samples=5):
         if not self.photos_dir.exists(): return {"ready": False, "message": "No registry."}
         people = [d for d in self.photos_dir.iterdir() if d.is_dir()]
-        if not people: return {"ready": False, "message": "No people registered."}
+        if not people: return {"ready": False, "message": "Registry empty."}
         
         insufficient = []
         for person_dir in people:
-            count = len(list(person_dir.glob("*.jpg")))
+            count = len(list(person_dir.glob("*.npy")))
             if count < min_samples:
-                insufficient.append(f"{person_dir.name} ({count}/{min_samples})")
+                insufficient.append(f"{person_dir.name} ({count}/5)")
         
         if insufficient:
-            return {"ready": False, "message": f"Need {min_samples} samples for: {', '.join(insufficient)}"}
+            return {"ready": False, "message": f"Need 5 samples for: {', '.join(insufficient)}"}
         return {"ready": True, "message": "Ready."}
 
     def recognize(self, image_np, fast_only=False):
-        """Instant recognition using LBPH predict."""
+        """Perform high-accuracy identity matching using Cosine Similarity on SFace embeddings."""
         try:
-            gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
-            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+            h, w = image_np.shape[:2]
+            self.detector.setInputSize((w, h))
+            _, faces = self.detector.detect(image_np)
             
-            if len(faces) == 0: return "Unknown", 0.0, None
+            if faces is None: return "Unknown", 0.0, None
             
-            x, y, w, h = faces[0]
-            roi_gray = gray[y:y+h, x:x+w]
+            face = faces[0]
+            bbox = [int(v) for v in face[:4]]
             
-            if not self.label_map:
-                return "Unknown", 0.0, (int(x), int(y), int(w), int(h))
+            if fast_only or not self.face_bank:
+                return "Unknown", 0.0, (bbox[0], bbox[1], bbox[2], bbox[3])
 
-            # LBPH Predict
-            label_id, confidence_dist = self.recognizer.predict(roi_gray)
+            # 1. Generate current embedding
+            aligned_face = self.recognizer.alignCrop(image_np, face)
+            current_emb = self.recognizer.feature(aligned_face)
             
-            # LBPH confidence is DISTANCE (lower is better)
-            # Typically < 100 is a good match depending on environment
-            threshold = 85 
-            if confidence_dist < threshold:
-                name = self.label_map.get(label_id, "Unknown")
-                # Normalize confidence for display (0-100 where higher is better)
-                display_conf = round(max(0, 100 - confidence_dist / 1.5), 2)
-                return name, display_conf, (int(x), int(y), int(w), int(h))
+            # 2. Match against bank
+            best_name = "Unknown"
+            max_score = 0
             
-            return "Unknown", 0.0, (int(x), int(y), int(w), int(h))
+            for name, bank_embs in self.face_bank.items():
+                for bank_emb in bank_embs:
+                    score = self.recognizer.match(current_emb, bank_emb, cv2.FaceRecognizerSF_FR_COSINE)
+                    if score > max_score:
+                        max_score = score
+                        best_name = name
+            
+            # SFace Cosine threshold is typically ~0.36
+            threshold = 0.36 
+            if max_score > threshold:
+                confidence = round(max_score * 100, 2)
+                return best_name, confidence, (bbox[0], bbox[1], bbox[2], bbox[3])
+            
+            return "Unknown", 0.0, (bbox[0], bbox[1], bbox[2], bbox[3])
         except Exception as e:
             logger.error(f"Recognition error: {e}")
             return "Unknown", 0.0, None
@@ -182,7 +196,5 @@ class FaceRecognizerWrapper:
         if self.photos_dir.exists():
             shutil.rmtree(self.photos_dir)
         self.photos_dir.mkdir(parents=True, exist_ok=True)
-        if self.model_path.exists(): self.model_path.unlink()
-        self.label_map = {}
-        self._save_label_map()
+        self.face_bank = {}
         logger.info("Registry cleared.")
