@@ -1,44 +1,64 @@
-# Smart Door Camera
+# Smart Door Camera System
 
-A complete, end-to-end Smart Door Camera web application with a sleek, hacker-esque black and white aesthetic for a college submission.
+A robust facial recognition security system designed for seamless access control and identity management. This project leverages contemporary web technologies and computer vision algorithms to provide a reliable, end-to-end smart door solution.
 
-## Features
-- **Frontend**: A sleek single-page Vanilla JS application that captures webcam frames directly in the browser. Features smooth view transitions, a custom CSS scanner animation, and highly polished visual elements.
-- **Backend**: A robust Flask API providing endpoints for image registration, model training, and frame recognition.
-- **Computer Vision**: Utilizes OpenCV's built-in `LBPHFaceRecognizer` for lightning-fast dynamic face registration and training.
+## Project Overview
 
-## Installation & Setup
+The Smart Door Camera System provides an intuitive interface for managing authorized personnel. Key capabilities include:
+- **Live Recognition**: Real-time face detection and matching against a trained database.
+- **Dynamic Registration**: On-the-fly capture and enrollment of new users via a web interface.
+- **Automated Training**: Efficient model updates using the LBPH (Local Binary Patterns Histograms) algorithm.
+- **Responsive Interface**: A modern, high-performance web frontend with integrated feedback and status indicators.
 
-1. **Create the Virtual Environment**
-   ```bash
-   python3 -m venv .venv
-   ```
+## Technical Stack
 
-2. **Activate the Virtual Environment & Install Dependencies**
-   ```bash
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
+- **Backend**: Flask-based REST API
+- **Computer Vision**: OpenCV (LBPHFaceRecognizer)
+- **Frontend**: Vanilla JavaScript and CSS
+- **Data Management**: File-system-based image storage and training data persistence
 
-3. **Start the Server**
-   ```bash
-   python backend/app.py
-   ```
-   
-4. **Open the Application**
-   Navigate to [http://localhost:5000](http://localhost:5000) in your web browser.
+## Getting Started
 
-## User Guide
+Follow these steps to set up and run the application locally:
 
-### 1. Registration (Setup Phase)
-- Enter an authorized person's name into the input field.
-- Click the circular shutter button to capture a photo. Use multiple angles for better accuracy.
+### 1. Prerequisites
+Ensure you have Python 3.8+ installed on your system.
 
-### 2. Training Phase
-- Click **START TRAINING**. A loading screen with a progress bar will appear while the backend processes the images.
+### 2. Environment Setup
+Create and activate a virtual environment to manage dependencies:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
-### 3. Demo / Live Recognition Phase
-- Step into the frame. If recognized, the system will flip to **UNLOCKED** in green. If unauthorized, it remains **LOCKED** in red.
+### 3. Installation
+Install the required Python packages:
+```bash
+pip install -r requirements.txt
+```
 
-### 4. Team Members
-To update the team members list, edit `data/team.txt` and refresh the page.
+### 4. Running the Application
+Start the Flask server:
+```bash
+python backend/app.py
+```
+The application will be accessible at `http://localhost:5000`.
+
+## Operational Workflow
+
+### Phase 1: Registration
+Input the name of the individual to be authorized and capture several clear photos from different angles using the interface's capture button.
+
+### Phase 2: Training
+Initiate the training process via the dashboard. The system will process the newly captured images and update the recognition model.
+
+### Phase 3: Recognition
+Once trained, the system will monitor the camera feed. Authorized personnel will trigger an "UNLOCKED" state, while unrecognized individuals will result in a "LOCKED" state.
+
+## Project Team
+
+- **S.Raghavapriyan**
+- **Utkarsh chahal**
+- **Ashish paila**
+- **Adhisriram RK**
+- **Nishanth**
