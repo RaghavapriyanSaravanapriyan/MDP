@@ -6,8 +6,6 @@ import threading
 import json
 from pathlib import Path
 from datetime import datetime
-from insightface.app import FaceAnalysis
-from sklearn.metrics.pairwise import cosine_similarity
 
 # Set logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -17,39 +15,49 @@ class FaceRecognizerWrapper:
     def __init__(self, data_dir="data"):
         self.base_dir = Path(data_dir).resolve()
         self.photos_dir = self.base_dir / "photos"
+        self.model_path = self.base_dir / "trainer.yml"
         self.photos_dir.mkdir(parents=True, exist_ok=True)
         
         self.lock = threading.Lock()
         
-        # --- INSIGHTFACE CONFIG ---
-        # buffalo_l is the high-accuracy model pack. 
-        # We force CPUExecutionProvider to avoid CUDA/GPU version mismatches on client.
+        # --- OPENCV LBPH CONFIG ---
+        # No external AI weights needed. Extremely stable.
         try:
-            self.app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
-            logger.info("InsightFace Engine: buffalo_l initialized on CPU.")
+            self.recognizer = cv2.face.LBPHFaceRecognizer_create()
+            # Haar Cascade is built into OpenCV
+            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            self.face_cascade = cv2.CascadeClassifier(cascade_path)
+            
+            if self.model_path.exists():
+                self.recognizer.read(str(self.model_path))
+                logger.info("LBPH Model loaded from disk.")
         except Exception as e:
-            logger.error(f"Failed to initialize InsightFace: {e}")
+            logger.error(f"Failed to initialize OpenCV Recognizer: {e}")
             raise e
 
-        self.face_bank = {} # {name: [embedding1, embedding2, ...]}
-        self.train() # Load existing data
+        self.label_map = self._load_label_map()
+
+    def _load_label_map(self):
+        map_path = self.base_dir / "labels.json"
+        if map_path.exists():
+            with open(map_path, 'r') as f:
+                # Convert keys back to int
+                return {int(k): v for k, v in json.load(f).items()}
+        return {}
+
+    def _save_label_map(self):
+        map_path = self.base_dir / "labels.json"
+        with open(map_path, 'w') as f:
+            json.dump(self.label_map, f)
 
     def preprocess_image(self, img):
-        """Standard preprocessing for consistency."""
         if img is None: return None
-        try:
-            # Subtle enhancement for better detection
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            cl = clahe.apply(l)
-            img = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
-        except: pass
-        return img
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Equalize histogram for better light consistency
+        return cv2.equalizeHist(gray)
 
     def save_face(self, name, image_np):
-        """Capture raw frame, extract aligned face, and save embedding."""
+        """Standard registration flow using Haar cascades and LBPH samples."""
         with self.lock:
             person_dir = self.photos_dir / name
             raw_dir = person_dir / "raw"
@@ -61,117 +69,110 @@ class FaceRecognizerWrapper:
             raw_count = len(list(raw_dir.glob("*.jpg")))
             cv2.imwrite(str(raw_dir / f"raw_{raw_count}_{timestamp}.jpg"), image_np)
             
-            # 2. InsightFace Extraction & Embedding
-            faces = self.app.get(image_np)
-            if not faces:
-                logger.warning(f"No face detected for {name}")
+            # 2. Extract Face for Training
+            gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+            
+            if len(faces) == 0:
+                logger.warning(f"No face detected in capture for {name}")
                 return False
                 
-            # Take the largest face found
-            face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)[0]
+            x, y, w, h = faces[0]
+            face_sample = gray[y:y+h, x:x+w]
             
-            # Save cropped aligned face
             sample_count = len(list(person_dir.glob("*.jpg")))
-            # Note: insightface doesn't return aligned face directly in get(), 
-            # we can crop using bbox or use its internal alignment if needed.
-            # For DeepFace compatibility, we'll save a simple crop.
-            x1, y1, x2, y2 = map(int, face.bbox)
-            crop = image_np[max(0, y1):y2, max(0, x1):x2]
-            if crop.size > 0:
-                cv2.imwrite(str(person_dir / f"{name}_{sample_count}.jpg"), crop)
+            img_path = person_dir / f"{name}_{sample_count}.jpg"
+            cv2.imwrite(str(img_path), face_sample)
             
-            # 3. Save Embedding (.npy) for fast loading
-            embedding = face.normed_embedding
-            npy_path = person_dir / f"{name}_{sample_count}.npy"
-            np.save(str(npy_path), embedding)
-            
-            # 4. Update Metadata
+            # 3. Update Metadata
             info_path = person_dir / "info.json"
             info = {
                 "name": name,
                 "last_registered": str(datetime.now()),
-                "sample_count": sample_count + 1,
-                "status": "authorized"
+                "sample_count": sample_count + 1
             }
             with open(info_path, 'w', encoding='utf-8') as f:
                 json.dump(info, f, indent=4)
             
-            self.train() # Hot-reload embeddings
             return True
 
     def train(self):
-        """Load all saved embeddings into memory for fast matching."""
+        """Train LBPH recognizer on all stored samples."""
         readiness = self.check_dataset_readiness()
         if not readiness["ready"]:
             return False, readiness["message"]
             
         with self.lock:
-            self.face_bank = {}
+            faces = []
+            labels = []
+            new_label_map = {}
+            current_id = 0
+            
             for person_dir in self.photos_dir.iterdir():
                 if person_dir.is_dir():
                     name = person_dir.name
-                    embeddings = []
-                    for npy_file in person_dir.glob("*.npy"):
-                        try:
-                            emb = np.load(str(npy_file))
-                            embeddings.append(emb)
-                        except: continue
-                    if embeddings:
-                        self.face_bank[name] = embeddings
+                    new_label_map[current_id] = name
+                    
+                    for img_file in person_dir.glob("*.jpg"):
+                        img = cv2.imread(str(img_file), cv2.IMREAD_GRAYSCALE)
+                        if img is not None:
+                            faces.append(img)
+                            labels.append(current_id)
+                    current_id += 1
             
-            logger.info(f"Loaded {len(self.face_bank)} people into face bank.")
-            return True, "Face bank updated."
+            if not faces:
+                return False, "No samples found for training."
+                
+            self.recognizer.train(faces, np.array(labels))
+            self.recognizer.save(str(self.model_path))
+            self.label_map = new_label_map
+            self._save_label_map()
+            
+            logger.info(f"LBPH Model trained for {len(self.label_map)} people.")
+            return True, "Model updated successfully."
 
     def check_dataset_readiness(self, min_samples=5):
-        """Verify min samples requirements."""
         if not self.photos_dir.exists(): return {"ready": False, "message": "No registry."}
         people = [d for d in self.photos_dir.iterdir() if d.is_dir()]
-        if not people: return {"ready": False, "message": "Registry empty."}
+        if not people: return {"ready": False, "message": "No people registered."}
         
         insufficient = []
         for person_dir in people:
-            count = len(list(person_dir.glob("*.npy")))
+            count = len(list(person_dir.glob("*.jpg")))
             if count < min_samples:
                 insufficient.append(f"{person_dir.name} ({count}/{min_samples})")
         
         if insufficient:
-            return {"ready": False, "message": f"Need more samples for: {', '.join(insufficient)}"}
-        return {"ready": True, "message": "All set."}
+            return {"ready": False, "message": f"Need {min_samples} samples for: {', '.join(insufficient)}"}
+        return {"ready": True, "message": "Ready."}
 
     def recognize(self, image_np, fast_only=False):
-        """Identify faces using InsightFace and Cosine Similarity."""
+        """Instant recognition using LBPH predict."""
         try:
-            # 1. Detect faces in current frame
-            faces = self.app.get(image_np)
-            if not faces: return "Unknown", 0.0, None
+            gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
             
-            # Consider the most prominent face
-            face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)[0]
-            bbox = [int(v) for v in face.bbox]
+            if len(faces) == 0: return "Unknown", 0.0, None
             
-            if fast_only or not self.face_bank:
-                return "Unknown", 0.0, (bbox[0], bbox[1], bbox[2]-bbox[0], bbox[3]-bbox[1])
+            x, y, w, h = faces[0]
+            roi_gray = gray[y:y+h, x:x+w]
+            
+            if not self.label_map:
+                return "Unknown", 0.0, (int(x), int(y), int(w), int(h))
 
-            # 2. Compare against face bank
-            current_emb = face.normed_embedding.reshape(1, -1)
-            best_name = "Unknown"
-            max_sim = 0
+            # LBPH Predict
+            label_id, confidence_dist = self.recognizer.predict(roi_gray)
             
-            for name, bank_embs in self.face_bank.items():
-                # Compare against all samples for this person and take max
-                sims = cosine_similarity(current_emb, np.array(bank_embs))
-                avg_sim = np.max(sims) # Or np.mean
-                if avg_sim > max_sim:
-                    max_sim = avg_sim
-                    best_name = name
+            # LBPH confidence is DISTANCE (lower is better)
+            # Typically < 100 is a good match depending on environment
+            threshold = 85 
+            if confidence_dist < threshold:
+                name = self.label_map.get(label_id, "Unknown")
+                # Normalize confidence for display (0-100 where higher is better)
+                display_conf = round(max(0, 100 - confidence_dist / 1.5), 2)
+                return name, display_conf, (int(x), int(y), int(w), int(h))
             
-            # Thresholding (InsightFace embeddings are very distinct)
-            threshold = 0.45 
-            if max_sim > threshold:
-                confidence = round(max_sim * 100, 2)
-                return best_name, confidence, (bbox[0], bbox[1], bbox[2]-bbox[0], bbox[3]-bbox[1])
-            
-            return "Unknown", 0.0, (bbox[0], bbox[1], bbox[2]-bbox[0], bbox[3]-bbox[1])
+            return "Unknown", 0.0, (int(x), int(y), int(w), int(h))
         except Exception as e:
             logger.error(f"Recognition error: {e}")
             return "Unknown", 0.0, None
@@ -181,5 +182,7 @@ class FaceRecognizerWrapper:
         if self.photos_dir.exists():
             shutil.rmtree(self.photos_dir)
         self.photos_dir.mkdir(parents=True, exist_ok=True)
-        self.face_bank = {}
+        if self.model_path.exists(): self.model_path.unlink()
+        self.label_map = {}
+        self._save_label_map()
         logger.info("Registry cleared.")

@@ -9,10 +9,6 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from recognizer import FaceRecognizerWrapper
 
-# Suppress warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-warnings.filterwarnings('ignore', category=UserWarning)
-
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("FaceApp")
