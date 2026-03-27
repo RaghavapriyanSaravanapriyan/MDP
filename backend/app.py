@@ -21,13 +21,16 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 # Global Recognizer Instance
 recog = None
+last_error = "None"
 
 def init_recognizer():
-    global recog
+    global recog, last_error
     try:
         recog = FaceRecognizerWrapper(data_dir=str(DATA_DIR))
         logger.info("Face Engine Initialized.")
+        last_error = "None"
     except Exception as e:
+        last_error = str(e)
         logger.error(f"ENGINE CRITICAL FAILURE: {e}")
         recog = None
 
@@ -36,7 +39,12 @@ init_recognizer()
 @app.route('/api/health', methods=['GET'])
 def health():
     if recog is None:
-        return jsonify({"status": "error", "message": "Engine failed to initialize. Check logs."}), 500
+        return jsonify({
+            "status": "error", 
+            "message": "Engine failed to initialize.",
+            "details": last_error,
+            "solution": "Ensure you ran 'pip install -r requirements.txt' and have internet to download models (~30MB) on first run."
+        }), 500
     return jsonify({"status": "success", "message": "Engine active."})
 
 def base64_to_image(b64_string):

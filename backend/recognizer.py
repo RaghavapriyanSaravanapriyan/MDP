@@ -55,16 +55,25 @@ class FaceRecognizerWrapper:
         }
         for path, url in urls.items():
             if not path.exists():
-                logger.info(f"Downloading model from {url}...")
+                logger.info(f"--- ATTENTION: DOWNLOADING MODEL '{path.name}' (~30MB) ---")
+                logger.info(f"Source: {url}")
                 try:
-                    response = requests.get(url, timeout=30)
+                    response = requests.get(url, stream=True, timeout=60)
                     response.raise_for_status()
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
                     with open(path, 'wb') as f:
-                        f.write(response.content)
-                    logger.info(f"Model saved to {path.name}")
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0 and downloaded % (1024 * 1024) == 0:
+                                    logger.info(f"Progress: {downloaded/(1024*1024):.1f}MB / {total_size/(1024*1024):.1f}MB")
+                    logger.info(f"Model successfully saved to {path}")
                 except Exception as e:
-                    logger.error(f"Failed to download {path.name}: {e}")
-                    raise e
+                    logger.error(f"DOWNLOAD FAILED for {path.name}. Reason: {e}")
+                    if path.exists(): path.unlink() # Remove partial file
+                    raise Exception(f"Failed to download AI model {path.name}: {e}. Check your internet connection.")
 
     def save_face(self, name, image_np):
         """Capture raw frame, extract aligned face crop, and generate SFace embedding."""
