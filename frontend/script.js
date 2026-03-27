@@ -27,6 +27,8 @@ const lastPerson = document.getElementById('last-person');
 const lockStatus = document.getElementById('lock-status');
 const teamMembersList = document.getElementById('team-members');
 
+const captureCountDisplay = document.getElementById('capture-count');
+
 let stream = null;
 let recognitionInterval = null;
 let setupTrackingInterval = null;
@@ -91,6 +93,7 @@ async function resetSystem() {
         setupTrackingInterval = setInterval(() => {
             performQuickDetection(setupVideo, setupOverlay);
         }, 1200); // Efficient tracking frequency
+        updateCaptureUI();
     } catch (e) {
         console.error("Reset failed", e);
     }
@@ -137,6 +140,14 @@ async function performQuickDetection(video, overlay) {
     }
 }
 
+function updateCaptureUI() {
+    captureCountDisplay.textContent = captureCount;
+    trainBtn.disabled = captureCount < 5;
+    if (captureCount >= 5) {
+        setupStatus.textContent = "Requirement met. You can start training or capture more.";
+    }
+}
+
 shutterBtn.addEventListener('click', async () => {
     const name = personName.value.trim();
     if (!name || isProcessing) return;
@@ -155,6 +166,7 @@ shutterBtn.addEventListener('click', async () => {
         if (data.status === 'success') {
             captureCount++;
             setupStatus.textContent = `Captured! (Total: ${captureCount})`;
+            updateCaptureUI();
         } else {
             setupStatus.textContent = `Error: ${data.message}`;
         }
@@ -194,7 +206,10 @@ imageUpload.addEventListener('change', (e) => {
             });
             const data = await res.json();
             setupStatus.textContent = data.status === 'success' ? `Uploaded!` : `Error: ${data.message}`;
-            if (data.status === 'success') captureCount++;
+            if (data.status === 'success') {
+                captureCount++;
+                updateCaptureUI();
+            }
             setTimeout(() => { imagePreview.style.display = 'none'; }, 2000);
         } catch (err) {
             setupStatus.textContent = "Upload failed.";

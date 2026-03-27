@@ -75,11 +75,11 @@ def register():
 
 @app.route('/api/train', methods=['POST'])
 def train():
-    success = recog.train()
+    success, message = recog.train()
     if success:
-        return jsonify({"status": "success", "message": "Database indexed successfully"})
+        return jsonify({"status": "success", "message": message})
     else:
-        return jsonify({"status": "error", "message": "Failed to index faces"}), 400
+        return jsonify({"status": "error", "message": message}), 400
 
 @app.route('/api/recognize', methods=['POST'])
 def recognize_face():
@@ -109,7 +109,7 @@ def get_team():
     team_path = DATA_DIR / "team.txt"
     if team_path.exists():
         try:
-            with open(team_path, 'r') as f:
+            with open(team_path, 'r', encoding='utf-8') as f:
                 members = [line.strip() for line in f.readlines() if line.strip()]
             return jsonify({"status": "success", "team": members})
         except Exception as e:

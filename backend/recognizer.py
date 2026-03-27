@@ -111,33 +111,61 @@ class FaceRecognizerWrapper:
             return True
 
     def _clear_index(self):
-        """Flush old index files to force fresh rebuild."""
+        """Flush old index files to force fresh rebuild. Safe for Windows file locks."""
         for pkl in self.photos_dir.glob("representations_*.pkl"):
-            pkl.unlink()
+            try:
+                pkl.unlink()
+            except Exception as e:
+                logger.warning(f"Could not unlink {pkl.name}: {e}")
 
     def train(self):
-        """Index the facial database. Hardened against empty folders."""
-        if not any(self.photos_dir.glob("*/*.jpg")):
-            logger.warning("Indexing failed: No photos found.")
-            return False
+        """Index the facial database. Hardened against empty or insufficient folders."""
+        with self.lock:
+            readiness_status = self.check_dataset_readiness()
+            if not readiness_status["ready"]:
+                logger.warning(f"Indexing failed: {readiness_status['message']}")
+                return False, readiness_status["message"]
+                
+            try:
+                self._clear_index()
+                # Trigger indexing
+                DeepFace.find(
+                    img_path=np.zeros((224, 224, 3), dtype=np.uint8),
+                    db_path=self.db_path,
+                    model_name=self.model_name,
+                    detector_backend=self.detector_backend,
+                    distance_metric=self.distance_metric,
+                    enforce_detection=False,
+                    silent=True
+                )
+                logger.info("Global facial index rebuilt.")
+                return True, "Database indexed successfully"
+            except Exception as e:
+                logger.error(f"Indexing error: {e}")
+                return False, f"Internal indexing error: {str(e)}"
+
+    def check_dataset_readiness(self, min_samples=5):
+        """Check if each registered person has at least min_samples."""
+        if not self.photos_dir.exists():
+            return {"ready": False, "message": "No photos directory found."}
             
-        try:
-            self._clear_index()
-            # Trigger indexing
-            DeepFace.find(
-                img_path=np.zeros((224, 224, 3), dtype=np.uint8),
-                db_path=self.db_path,
-                model_name=self.model_name,
-                detector_backend=self.detector_backend,
-                distance_metric=self.distance_metric,
-                enforce_detection=False,
-                silent=True
-            )
-            logger.info("Global facial index rebuilt.")
-            return True
-        except Exception as e:
-            logger.error(f"Indexing error: {e}")
-            return False
+        people = [d for d in self.photos_dir.iterdir() if d.is_dir()]
+        if not people:
+            return {"ready": False, "message": "No people registered yet."}
+            
+        insufficient = []
+        for person_dir in people:
+            count = len(list(person_dir.glob("*.jpg")))
+            if count < min_samples:
+                insufficient.append(f"{person_dir.name} ({count}/{min_samples})")
+        
+        if insufficient:
+            return {
+                "ready": False, 
+                "message": f"Insufficient photos for: {', '.join(insufficient)}. Minimum {min_samples} required."
+            }
+            
+        return {"ready": True, "message": "Dataset is ready."}
 
     def recognize(self, image_np, fast_only=False):
         """Dual-Path logic: Optimized tracking vs. High-accuracy identity."""

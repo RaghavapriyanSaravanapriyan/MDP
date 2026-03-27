@@ -23,11 +23,15 @@
         </div>
         <div class="controls">
             <input type="text" id="person-name" placeholder="Enter Name">
+            <div class="image-counter">
+                <span id="capture-count">0</span> / 5 Samples
+            </div>
             <div class="upload-section">
                 <input type="file" id="image-upload" accept="image/*" style="display: none;">
                 <button id="upload-btn" class="secondary-btn small-btn">Upload Image</button>
             </div>
             <p id="setup-status"></p>
+            <p class="requirement-note">Minimum 5 samples required per person.</p>
         </div>
         <div class="action-bar">
             <!-- Clear/Reset button logic can be hidden or just rely on page load via api/setup -->

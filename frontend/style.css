@@ -132,6 +132,27 @@ input[type="text"]:focus {
     color: #aaaaaa;
 }
 
+.image-counter {
+    margin-top: 15px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    color: var(--accent);
+}
+
+.requirement-note {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 5px;
+}
+
+.primary-btn:disabled {
+    background: var(--gray);
+    color: #666;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
 .action-bar {
     margin-top: 30px;
 }
