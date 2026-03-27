@@ -6,15 +6,10 @@ const views = {
     demo: document.getElementById('demo-view')
 };
 
-// Video Elements
 const setupVideo = document.getElementById('setup-video');
 const demoVideo = document.getElementById('demo-video');
-
-// Overlay Elements
 const setupOverlay = document.getElementById('setup-overlay');
 const demoOverlay = document.getElementById('demo-overlay');
-
-// Hidden capture canvas
 const captureCanvas = document.getElementById('canvas');
 const captureCtx = captureCanvas.getContext('2d');
 
@@ -35,6 +30,8 @@ const teamMembersList = document.getElementById('team-members');
 let stream = null;
 let recognitionInterval = null;
 let setupTrackingInterval = null;
+let isProcessing = false;
+let captureCount = 0;
 
 async function init() {
     await resetSystem();
@@ -54,12 +51,8 @@ async function startCamera(videoElement, overlayCanvas) {
         videoElement.onloadedmetadata = () => {
             const width = videoElement.videoWidth;
             const height = videoElement.videoHeight;
-            
-            // Sync capture canvas
             captureCanvas.width = width;
             captureCanvas.height = height;
-            
-            // Sync overlay canvas if provided
             if (overlayCanvas) {
                 overlayCanvas.width = width;
                 overlayCanvas.height = height;
@@ -91,14 +84,13 @@ async function resetSystem() {
         showView('setup');
         await startCamera(setupVideo, setupOverlay);
         personName.value = '';
-        setupStatus.textContent = "System ready. Enter name and take a few pics.";
+        captureCount = 0;
+        setupStatus.textContent = "Ready. Enter name and click shutter.";
         
-        // Start a lightweight tracking loop for setup feedback
         if (setupTrackingInterval) clearInterval(setupTrackingInterval);
         setupTrackingInterval = setInterval(() => {
-            // We just send to recognize but ignore identity, only show the box
             performQuickDetection(setupVideo, setupOverlay);
-        }, 800);
+        }, 1200); // Efficient tracking frequency
     } catch (e) {
         console.error("Reset failed", e);
     }
@@ -112,46 +104,45 @@ function captureFrame(videoElement) {
 function drawFaceOverlay(canvas, box, label, confidence) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
     if (!box) return;
     
     const [x, y, w, h] = box;
-    
-    // Aesthetic: White border for detection
-    ctx.strokeStyle = '#ffffff';
+    ctx.strokeStyle = label ? '#00ff00' : '#ffffff';
     ctx.lineWidth = 3;
-    ctx.setLineDash([5, 5]); 
+    ctx.setLineDash(label ? [] : [5, 5]); 
     ctx.strokeRect(x, y, w, h);
     
-    // Label
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px Space Mono';
-    const text = label ? `${label} (${confidence}%)` : 'DETECTING...';
-    ctx.fillText(text, x, y - 10);
+    if (label) {
+        ctx.fillStyle = '#00ff00';
+        ctx.font = 'bold 16px Space Mono';
+        ctx.fillText(`${label} (${confidence}%)`, x, y - 10);
+    }
 }
 
 async function performQuickDetection(video, overlay) {
-    if (!stream) return;
+    if (!stream || isProcessing) return;
     const imgB64 = captureFrame(video);
+    isProcessing = true;
     try {
         const res = await fetch(`${API_URL}/recognize`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: imgB64 })
+            body: JSON.stringify({ image: imgB64, fast_only: true })
         });
         const data = await res.json();
         drawFaceOverlay(overlay, data.box, null, 0);
-    } catch(e) {}
+    } catch(e) {
+    } finally {
+        isProcessing = false;
+    }
 }
 
 shutterBtn.addEventListener('click', async () => {
     const name = personName.value.trim();
-    if (!name) {
-        setupStatus.textContent = "Please enter a name first.";
-        return;
-    }
+    if (!name || isProcessing) return;
     
-    setupStatus.textContent = "Capturing...";
+    isProcessing = true;
+    setupStatus.textContent = "Processing capture...";
     const imageB64 = captureFrame(setupVideo);
     
     try {
@@ -161,14 +152,16 @@ shutterBtn.addEventListener('click', async () => {
             body: JSON.stringify({ name, image: imageB64 })
         });
         const data = await res.json();
-        
         if (data.status === 'success') {
-            setupStatus.textContent = `Captured! Take ${~~(Math.random()*2)+2} more for better accuracy.`;
+            captureCount++;
+            setupStatus.textContent = `Captured! (Total: ${captureCount})`;
         } else {
             setupStatus.textContent = `Error: ${data.message}`;
         }
     } catch (e) {
-        setupStatus.textContent = "Network error.";
+        setupStatus.textContent = "Network error. Server might be busy.";
+    } finally {
+        isProcessing = false;
     }
 });
 
@@ -176,7 +169,7 @@ uploadBtn.addEventListener('click', () => imageUpload.click());
 
 imageUpload.addEventListener('change', (e) => {
     const file = e.target.files[0];
-    if (!file) return;
+    if (!file || isProcessing) return;
 
     const name = personName.value.trim();
     if (!name) {
@@ -191,6 +184,7 @@ imageUpload.addEventListener('change', (e) => {
         imagePreview.style.backgroundImage = `url(${imageB64})`;
         imagePreview.style.display = 'block';
         setupStatus.textContent = "Uploading...";
+        isProcessing = true;
 
         try {
             const res = await fetch(`${API_URL}/register`, {
@@ -199,10 +193,13 @@ imageUpload.addEventListener('change', (e) => {
                 body: JSON.stringify({ name, image: imageB64 })
             });
             const data = await res.json();
-            setupStatus.textContent = data.status === 'success' ? `Success!` : `Error: ${data.message}`;
+            setupStatus.textContent = data.status === 'success' ? `Uploaded!` : `Error: ${data.message}`;
+            if (data.status === 'success') captureCount++;
             setTimeout(() => { imagePreview.style.display = 'none'; }, 2000);
         } catch (err) {
             setupStatus.textContent = "Upload failed.";
+        } finally {
+            isProcessing = false;
         }
     };
     reader.readAsDataURL(file);
@@ -215,25 +212,25 @@ trainBtn.addEventListener('click', async () => {
     
     let progress = 0;
     const progressInterval = setInterval(() => {
-        progress += 1; 
+        progress += 2; 
         if (progress > 98) progress = 98;
         progressBar.style.width = `${progress}%`;
-    }, 100);
+    }, 250);
 
     try {
         const res = await fetch(`${API_URL}/train`, { method: 'POST' });
         const data = await res.json();
         clearInterval(progressInterval);
         progressBar.style.width = '100%';
-        
         if (data.status === 'success') {
-            setTimeout(startDemo, 800);
+            setTimeout(startDemo, 1000);
         } else {
-            alert(`Error: ${data.message}`);
+            alert(`Indexing Error: ${data.message}. Ensure you captured enough photos.`);
             showView('setup');
         }
     } catch (e) {
         clearInterval(progressInterval);
+        alert("Server timeout during indexing. Model initialization can take 1-2 mins on first run.");
         showView('setup');
     }
 });
@@ -242,12 +239,13 @@ async function startDemo() {
     showView('demo');
     await startCamera(demoVideo, demoOverlay);
     if (recognitionInterval) clearInterval(recognitionInterval);
-    recognitionInterval = setInterval(processRecognition, 1000);
+    recognitionInterval = setInterval(processRecognition, 2000); // Optimized for accuracy vs CPU
 }
 
 async function processRecognition() {
-    if (!stream) return;
+    if (!stream || isProcessing) return;
     const imageB64 = captureFrame(demoVideo);
+    isProcessing = true;
     
     try {
         const res = await fetch(`${API_URL}/recognize`, {
@@ -256,7 +254,6 @@ async function processRecognition() {
             body: JSON.stringify({ image: imageB64 })
         });
         const data = await res.json();
-        
         if (data.status === 'success') {
             drawFaceOverlay(demoOverlay, data.box, data.name, data.confidence);
             if (data.name !== 'Unknown') {
@@ -265,7 +262,9 @@ async function processRecognition() {
             updateLock(data.name);
         }
     } catch (e) {
-        console.error("Link offline");
+        console.error("Connection lost");
+    } finally {
+        isProcessing = false;
     }
 }
 

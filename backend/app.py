@@ -85,6 +85,7 @@ def train():
 def recognize_face():
     data = request.json
     image_b64 = data.get("image")
+    fast_only = data.get("fast_only", False)
     
     if not image_b64:
         return jsonify({"status": "error", "message": "Image required"}), 400
@@ -93,7 +94,7 @@ def recognize_face():
     if img is None:
         return jsonify({"status": "error", "message": "Failed to decode image"}), 400
         
-    name, confidence, box = recog.recognize(img)
+    name, confidence, box = recog.recognize(img, fast_only=fast_only)
     
     return jsonify({
         "status": "success",
