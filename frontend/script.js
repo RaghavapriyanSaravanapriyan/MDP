@@ -6,10 +6,17 @@ const views = {
     demo: document.getElementById('demo-view')
 };
 
+// Video Elements
 const setupVideo = document.getElementById('setup-video');
 const demoVideo = document.getElementById('demo-video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+
+// Overlay Elements
+const setupOverlay = document.getElementById('setup-overlay');
+const demoOverlay = document.getElementById('demo-overlay');
+
+// Hidden capture canvas
+const captureCanvas = document.getElementById('canvas');
+const captureCtx = captureCanvas.getContext('2d');
 
 const shutterBtn = document.getElementById('shutter-btn');
 const uploadBtn = document.getElementById('upload-btn');
@@ -27,23 +34,36 @@ const teamMembersList = document.getElementById('team-members');
 
 let stream = null;
 let recognitionInterval = null;
+let setupTrackingInterval = null;
 
 async function init() {
     await resetSystem();
     loadTeamMembers();
 }
 
-async function startCamera(videoElement) {
+async function startCamera(videoElement, overlayCanvas) {
     try {
         if (stream) {
             stream.getTracks().forEach(track => track.stop());
         }
-        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { width: 640, height: 480 } 
+        });
         videoElement.srcObject = stream;
+        
         videoElement.onloadedmetadata = () => {
-            canvas.width = videoElement.videoWidth;
-            canvas.height = videoElement.videoHeight;
-            // Mirror canvas conditionally when drawing!
+            const width = videoElement.videoWidth;
+            const height = videoElement.videoHeight;
+            
+            // Sync capture canvas
+            captureCanvas.width = width;
+            captureCanvas.height = height;
+            
+            // Sync overlay canvas if provided
+            if (overlayCanvas) {
+                overlayCanvas.width = width;
+                overlayCanvas.height = height;
+            }
         };
     } catch (err) {
         console.error("Camera error:", err);
@@ -56,6 +76,8 @@ function stopCamera() {
         stream.getTracks().forEach(track => track.stop());
         stream = null;
     }
+    if (setupTrackingInterval) clearInterval(setupTrackingInterval);
+    if (recognitionInterval) clearInterval(recognitionInterval);
 }
 
 function showView(viewName) {
@@ -67,19 +89,59 @@ async function resetSystem() {
     try {
         await fetch(`${API_URL}/setup`, { method: 'POST' });
         showView('setup');
-        startCamera(setupVideo);
+        await startCamera(setupVideo, setupOverlay);
         personName.value = '';
-        setupStatus.textContent = "System ready. Enter name and take a few pics (click shutter).";
+        setupStatus.textContent = "System ready. Enter name and take a few pics.";
+        
+        // Start a lightweight tracking loop for setup feedback
+        if (setupTrackingInterval) clearInterval(setupTrackingInterval);
+        setupTrackingInterval = setInterval(() => {
+            // We just send to recognize but ignore identity, only show the box
+            performQuickDetection(setupVideo, setupOverlay);
+        }, 800);
     } catch (e) {
         console.error("Reset failed", e);
     }
 }
 
 function captureFrame(videoElement) {
-    // We visually mirror the video in CSS, but the raw capture is not mirrored.
-    // If we want mirroring on capture, we'd do ctx.translate/scale, but OpenCV doesn't care.
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.8);
+    captureCtx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+    return captureCanvas.toDataURL('image/jpeg', 0.8);
+}
+
+function drawFaceOverlay(canvas, box, label, confidence) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    if (!box) return;
+    
+    const [x, y, w, h] = box;
+    
+    // Aesthetic: White border for detection
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([5, 5]); 
+    ctx.strokeRect(x, y, w, h);
+    
+    // Label
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 16px Space Mono';
+    const text = label ? `${label} (${confidence}%)` : 'DETECTING...';
+    ctx.fillText(text, x, y - 10);
+}
+
+async function performQuickDetection(video, overlay) {
+    if (!stream) return;
+    const imgB64 = captureFrame(video);
+    try {
+        const res = await fetch(`${API_URL}/recognize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: imgB64 })
+        });
+        const data = await res.json();
+        drawFaceOverlay(overlay, data.box, null, 0);
+    } catch(e) {}
 }
 
 shutterBtn.addEventListener('click', async () => {
@@ -89,7 +151,7 @@ shutterBtn.addEventListener('click', async () => {
         return;
     }
     
-    setupStatus.textContent = "Processing capture...";
+    setupStatus.textContent = "Capturing...";
     const imageB64 = captureFrame(setupVideo);
     
     try {
@@ -101,18 +163,16 @@ shutterBtn.addEventListener('click', async () => {
         const data = await res.json();
         
         if (data.status === 'success') {
-            setupStatus.textContent = `Captured and saved! (Tip: take multiple snaps of ${name})`;
+            setupStatus.textContent = `Captured! Take ${~~(Math.random()*2)+2} more for better accuracy.`;
         } else {
-            setupStatus.textContent = `Error: ${data.message}. Make sure your face is visible.`;
+            setupStatus.textContent = `Error: ${data.message}`;
         }
     } catch (e) {
-        setupStatus.textContent = "Network error while saving.";
+        setupStatus.textContent = "Network error.";
     }
 });
 
-uploadBtn.addEventListener('click', () => {
-    imageUpload.click();
-});
+uploadBtn.addEventListener('click', () => imageUpload.click());
 
 imageUpload.addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -120,7 +180,7 @@ imageUpload.addEventListener('change', (e) => {
 
     const name = personName.value.trim();
     if (!name) {
-        setupStatus.textContent = "Please enter a name first.";
+        setupStatus.textContent = "Enter name first.";
         imageUpload.value = '';
         return;
     }
@@ -128,11 +188,9 @@ imageUpload.addEventListener('change', (e) => {
     const reader = new FileReader();
     reader.onload = async (event) => {
         const imageB64 = event.target.result;
-        
-        // Show preview
         imagePreview.style.backgroundImage = `url(${imageB64})`;
         imagePreview.style.display = 'block';
-        setupStatus.textContent = "Uploading image...";
+        setupStatus.textContent = "Uploading...";
 
         try {
             const res = await fetch(`${API_URL}/register`, {
@@ -141,85 +199,54 @@ imageUpload.addEventListener('change', (e) => {
                 body: JSON.stringify({ name, image: imageB64 })
             });
             const data = await res.json();
-            
-            if (data.status === 'success') {
-                setupStatus.textContent = `Image uploaded and saved for ${name}!`;
-                setTimeout(() => {
-                    imagePreview.style.display = 'none';
-                }, 2000);
-            } else {
-                setupStatus.textContent = `Error: ${data.message}.`;
-                imagePreview.style.display = 'none';
-            }
+            setupStatus.textContent = data.status === 'success' ? `Success!` : `Error: ${data.message}`;
+            setTimeout(() => { imagePreview.style.display = 'none'; }, 2000);
         } catch (err) {
-            setupStatus.textContent = "Network error while uploading.";
-            imagePreview.style.display = 'none';
+            setupStatus.textContent = "Upload failed.";
         }
-        imageUpload.value = '';
     };
     reader.readAsDataURL(file);
 });
 
 trainBtn.addEventListener('click', async () => {
+    if (setupTrackingInterval) clearInterval(setupTrackingInterval);
     showView('loading');
     stopCamera();
     
-    // min 3 seconds
     let progress = 0;
-    progressBar.style.width = '0%';
-    
     const progressInterval = setInterval(() => {
-        progress += 2; 
-        if (progress > 95) progress = 95;
+        progress += 1; 
+        if (progress > 98) progress = 98;
         progressBar.style.width = `${progress}%`;
-    }, 50);
+    }, 100);
 
-    const startTime = Date.now();
-    
     try {
         const res = await fetch(`${API_URL}/train`, { method: 'POST' });
         const data = await res.json();
-        
-        const elapsedTime = Date.now() - startTime;
-        if (elapsedTime < 3000) {
-            await new Promise(r => setTimeout(r, 3000 - elapsedTime));
-        }
-        
         clearInterval(progressInterval);
         progressBar.style.width = '100%';
         
         if (data.status === 'success') {
-            setTimeout(() => {
-                startDemo();
-            }, 500);
+            setTimeout(startDemo, 800);
         } else {
-            alert(`Training failed: ${data.message}`);
+            alert(`Error: ${data.message}`);
             showView('setup');
-            startCamera(setupVideo);
         }
-        
     } catch (e) {
         clearInterval(progressInterval);
-        alert("Training failed. Check console.");
         showView('setup');
-        startCamera(setupVideo);
     }
 });
 
 async function startDemo() {
     showView('demo');
-    await startCamera(demoVideo);
-    
-    lastPerson.textContent = 'None';
-    updateLock('Unknown');
-
+    await startCamera(demoVideo, demoOverlay);
     if (recognitionInterval) clearInterval(recognitionInterval);
-    recognitionInterval = setInterval(processRecognition, 1000); // 1FPS
+    recognitionInterval = setInterval(processRecognition, 1000);
 }
 
 async function processRecognition() {
     if (!stream) return;
-    
     const imageB64 = captureFrame(demoVideo);
     
     try {
@@ -231,51 +258,27 @@ async function processRecognition() {
         const data = await res.json();
         
         if (data.status === 'success') {
+            drawFaceOverlay(demoOverlay, data.box, data.name, data.confidence);
             if (data.name !== 'Unknown') {
-                lastPerson.textContent = data.name;
+                lastPerson.textContent = `${data.name} (${data.confidence}%)`;
             }
             updateLock(data.name);
         }
     } catch (e) {
-        console.error("Recognition error", e);
+        console.error("Link offline");
     }
 }
 
 function updateLock(name) {
     const isLocked = name === 'Unknown';
     const h1 = lockStatus.querySelector('h1');
-    
-    if (isLocked) {
-        lockStatus.className = 'lock-status locked';
-        h1.textContent = 'LOCKED';
-    } else {
-        lockStatus.className = 'lock-status unlocked';
-        h1.textContent = 'UNLOCKED';
-    }
-}
-
-async function loadTeamMembers() {
-    try {
-        const res = await fetch(`${API_URL}/team`);
-        const data = await res.json();
-        if (data.status === 'success') {
-            teamMembersList.innerHTML = '';
-            data.team.forEach(member => {
-                const li = document.createElement('li');
-                li.textContent = member;
-                teamMembersList.appendChild(li);
-            });
-        }
-    } catch (e) {
-        console.error("Failed to load team");
-    }
+    lockStatus.className = isLocked ? 'lock-status locked' : 'lock-status unlocked';
+    h1.textContent = isLocked ? 'LOCKED' : 'UNLOCKED';
 }
 
 restartBtn.addEventListener('click', () => {
-    if (recognitionInterval) clearInterval(recognitionInterval);
+    stopCamera();
     resetSystem();
 });
 
-// Avoid executing until DOM is fully loaded or script is at end of body.
-// It is at the end of body in index.html, so this is fine.
 init();

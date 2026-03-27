@@ -4,12 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ff8c20b8-7ce2-449a-82f1-05415c1bb5cb" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/data/model.yml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/names.npy" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/photos/Raghav/0.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/photos/Raghav/1.jpg" beforeDir="false" />
-    </list>
+    <list default="true" id="ff8c20b8-7ce2-449a-82f1-05415c1bb5cb" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

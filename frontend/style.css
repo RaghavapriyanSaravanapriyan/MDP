@@ -313,3 +313,14 @@ h3 {
     color: var(--unlocked);
     box-shadow: inset 0 0 30px rgba(51, 255, 51, 0.15);
 }
+
+.face-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 20;
+    pointer-events: none;
+    transform: scaleX(-1); /* Match mirrored video */
+}
