@@ -23,8 +23,25 @@ CORS(app)
 # Configuration
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-# Initialize Recognizer
-recog = FaceRecognizerWrapper(data_dir=str(DATA_DIR))
+# Global Recognizer Instance
+recog = None
+
+def init_recognizer():
+    global recog
+    try:
+        recog = FaceRecognizerWrapper(data_dir=str(DATA_DIR))
+        logger.info("Face Engine Initialized.")
+    except Exception as e:
+        logger.error(f"ENGINE CRITICAL FAILURE: {e}")
+        recog = None
+
+init_recognizer()
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    if recog is None:
+        return jsonify({"status": "error", "message": "Engine failed to initialize. Check logs."}), 500
+    return jsonify({"status": "success", "message": "Engine active."})
 
 def base64_to_image(b64_string):
     """Convert base64 string to OpenCV BGR image."""
@@ -51,11 +68,17 @@ def static_files(path):
 
 @app.route('/api/setup', methods=['POST'])
 def setup():
+    if recog is None:
+        init_recognizer() # Try one more time
+        if recog is None:
+            return jsonify({"status": "error", "message": "Engine not initialized"}), 500
     recog.clear_data()
     return jsonify({"status": "success", "message": "System reset successfully"})
 
 @app.route('/api/register', methods=['POST'])
 def register():
+    if recog is None:
+        return jsonify({"status": "error", "message": "Engine not initialized"}), 500
     data = request.json
     name = data.get("name")
     image_b64 = data.get("image")
@@ -75,6 +98,8 @@ def register():
 
 @app.route('/api/train', methods=['POST'])
 def train():
+    if recog is None:
+        return jsonify({"status": "error", "message": "Engine not initialized"}), 500
     success, message = recog.train()
     if success:
         return jsonify({"status": "success", "message": message})
@@ -83,6 +108,8 @@ def train():
 
 @app.route('/api/recognize', methods=['POST'])
 def recognize_face():
+    if recog is None:
+        return jsonify({"status": "error", "message": "Engine not initialized"}), 500
     data = request.json
     image_b64 = data.get("image")
     fast_only = data.get("fast_only", False)
